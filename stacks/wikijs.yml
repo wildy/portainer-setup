@@ -1,0 +1,29 @@
+services:
+  wikijs:
+    image: ghcr.io/requarks/wiki:${TAG}
+    container_name: wikijs
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME}
+      DB_PASS: ${DB_PASS}
+      DB_PORT: ${DB_PORT}
+      DB_TYPE: ${DB_TYPE}
+      DB_USER: ${DB_USER}
+    networks:
+      - postgres
+      - traefik
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wikijs.rule=Host(`wiki.koshaq.net`)"
+      - "traefik.http.routers.wikijs.entrypoints=websecure"
+      - "traefik.http.routers.wikijs.tls.certresolver=letsencrypt"
+      - "traefik.http.services.wikijs.loadbalancer.server.port=3000"
+      - "traefik.http.routers.wikijs.middlewares=hsts-header@docker,compress@docker"
+      - "traefik.docker.network=traefik"
+
+networks:
+  postgres:
+    external: true
+  traefik:
+    external: true

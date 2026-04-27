@@ -1,0 +1,94 @@
+services:
+  authentik-server:
+    image: ghcr.io/goauthentik/server:${TAG}
+    container_name: authentik-server
+    command: server
+    environment:
+      AUTHENTIK_POSTGRESQL__HOST: ${AUTHENTIK_POSTGRESQL__HOST} # or external hostname
+      AUTHENTIK_POSTGRESQL__PORT: ${AUTHENTIK_POSTGRESQL__PORT}
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRESQL__USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRESQL__PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRESQL__NAME}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: ${AUTHENTIK_REDIS__HOST}
+    volumes:
+      - authentik-media:/media
+      - authentik-custom-templates:/templates
+    networks:
+      - traefik
+      - authentik
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authentik.rule=Host(`auth.koshaq.net`)"
+      - "traefik.http.routers.authentik.entrypoints=websecure"
+      - "traefik.http.routers.authentik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.authentik.middlewares=hsts-header@docker,compress@docker"
+      - "traefik.http.routers.test-proxy-provider.rule=Host(`test-proxy-provider.koshaq.net`)"
+      - "traefik.http.routers.test-proxy-provider.entrypoints=websecure"
+      - "traefik.http.routers.test-proxy-provider.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.test-proxy-provider.middlewares=hsts-header@docker,redirect-auth-flows@docker"
+      - 'traefik.http.middlewares.redirect-auth-flows.redirectregex.regex=^https://test-proxy-provider\.koshaq\.net/(flow|if)(/.*)?'
+      - "traefik.http.middlewares.redirect-auth-flows.redirectregex.replacement=https://auth.koshaq.net/$${1}$${2}"
+      - "traefik.http.middlewares.redirect-auth-flows.redirectregex.permanent=false"
+      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+      - "traefik.docker.network=traefik"
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${TAG}
+    container_name: authentik-worker
+    command: worker
+    environment:
+      AUTHENTIK_POSTGRESQL__HOST: ${AUTHENTIK_POSTGRESQL__HOST} # or external hostname
+      AUTHENTIK_POSTGRESQL__PORT: ${AUTHENTIK_POSTGRESQL__PORT}
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRESQL__USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRESQL__PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRESQL__NAME}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: ${AUTHENTIK_REDIS__HOST}
+    volumes:
+      - authentik-media:/media
+      - authentik-custom-templates:/templates
+      - authentik-certs:/certs
+    #      - /var/run/docker.sock:/var/run/docker.sock # WARNING!
+    networks:
+      - authentik
+      - postgres
+    restart: always
+    #    user: root # WARNING!
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:alpine
+    command: --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - "authentik-redis:/data"
+    networks:
+      - authentik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  authentik-media:
+  authentik-certs:
+  authentik-custom-templates:
+  authentik-redis:
+
+networks:
+  traefik:
+    external: true
+  authentik:
+    internal: true
+  postgres:
+    external: true

@@ -1,0 +1,26 @@
+services:
+  privatebin:
+    image: privatebin/nginx-fpm-alpine:stable
+    volumes:
+      - privatebin_data:/srv/data
+      - privatebin_cfg:/srv/cfg
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.privatebin.rule=Host(`bin.koshaq.net`)"
+      - "traefik.http.routers.privatebin.entrypoints=websecure"
+      - "traefik.http.routers.privatebin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.privatebin.loadbalancer.server.port=8080"
+      - "traefik.http.routers.privatebin.middlewares=hsts-header@docker,compress@docker"
+      - "traefik.docker.network=traefik"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  privatebin_data:
+  privatebin_cfg:
+networks:
+  traefik:
+    external: true
