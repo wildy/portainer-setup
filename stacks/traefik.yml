@@ -1,0 +1,139 @@
+services:
+  traefik:
+    image: traefik:${TRAEFIK_TAG}
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      - "--providers.docker.endpoint=http://socket-proxy:2375"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http3=true"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=me@koshaq.net"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--log.level=DEBUG"
+      - "--log.format=common"
+      - "--accesslog=true"
+      - "--accesslog.format=common"
+
+    ports:
+      - "80:80"
+      - "443:443/tcp"
+      - "443:443/udp"
+    networks:
+      - traefik
+    volumes:
+      - traefik_letsencrypt:/letsencrypt
+    security_opt:
+      - no-new-privileges:true
+
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: socket-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - SERVICES=1
+      - TASKS=1
+      - NODES=1
+      - NETWORKS=1
+      - INFO=1
+      - EVENTS=1   # disable if you want
+      - READ_ONLY=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik
+
+    # Dumb labels for traefik configuration.
+    # I just use this container here as the config holder because it's conveniently located :)
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      
+      # Middleware: hsts-header
+      - "traefik.http.middlewares.hsts-header.headers.customresponseheaders.Strict-Transport-Security=max-age=63072000; includeSubDomains; preload"
+
+      # Middleware: enable CORS headers
+      - "traefik.http.middlewares.cors.headers.accesscontrolallowmethods=*"
+      - "traefik.http.middlewares.cors.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.cors.headers.accesscontrolmaxage=180"
+      - "traefik.http.middlewares.cors.headers.addvaryheader=true"
+      
+      # Middleware: authentik: traefik
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.address=http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.trustforwardheader=true"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-username"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-groups"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-email"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-name"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-uid"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-jwt"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-meta-jwks"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-meta-outpost"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-meta-provider"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-meta-app"
+      - "traefik.http.middlewares.authentik-traefik.forwardauth.authresponseheaders=X-authentik-meta-version"
+
+      # Expose dashboard via another container
+      - "traefik.http.routers.dashboard.rule=Host(`traefik-dashboard.indium.koshaq.net`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=authentik-traefik@docker,hsts-header@docker"
+
+      # Redirect matrix to matrix.koshaq.net
+      # Router definition
+      - "traefik.http.routers.redirect-matrix.rule=Host(`koshaq.net`) && PathPrefix(`/.well-known/matrix`)"
+      - "traefik.http.routers.redirect-matrix.entrypoints=websecure"
+      - "traefik.http.routers.redirect-matrix.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.redirect-matrix.middlewares=cors@docker,matrix-redirect@docker"
+
+
+      # Middleware for redirection
+      - "traefik.http.middlewares.matrix-redirect.redirectregex.regex=^https://koshaq\\.net(/\\.well-known/matrix/.*)"
+      - "traefik.http.middlewares.matrix-redirect.redirectregex.replacement=https://matrix.koshaq.net$${1}"
+      - "traefik.http.middlewares.matrix-redirect.redirectregex.permanent=true"
+
+
+      # Redirect koshaq.net to wiki.koshaq.net
+      # Router definition
+      - "traefik.http.routers.redirect-koshaq-root.rule=Host(`koshaq.net`) && Path(`/`)"
+      - "traefik.http.routers.redirect-koshaq-root.entrypoints=websecure"
+      - "traefik.http.routers.redirect-koshaq-root.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.redirect-koshaq-root.middlewares=wiki-redirect"
+
+      # Redirect bigkitten.net to wiki.koshaq.net
+      # Router definition
+      - "traefik.http.routers.redirect-bigkitten-root.rule=Host(`bigkitten.net`) && Path(`/`)"
+      - "traefik.http.routers.redirect-bigkitten-root.entrypoints=websecure"
+      - "traefik.http.routers.redirect-bigkitten-root.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.redirect-bigkitten-root.middlewares=wiki-redirect"
+
+      # Middleware for redirection
+      - "traefik.http.middlewares.wiki-redirect.redirectregex.regex=^(.*)$"
+      - "traefik.http.middlewares.wiki-redirect.redirectregex.replacement=https://wiki.koshaq.net/"
+      - "traefik.http.middlewares.wiki-redirect.redirectregex.permanent=false"
+
+      # Use a dummy service (this service doesn't matter, request will redirect)
+      - "traefik.http.services.dummy.loadbalancer.server.port=80"
+
+      # Middleware for compression
+      - "traefik.http.middlewares.compress.compress=true"
+    security_opt:
+      - no-new-privileges:true
+
+
+volumes:
+  traefik_letsencrypt:
+
+networks:
+  traefik:
+    external: true
